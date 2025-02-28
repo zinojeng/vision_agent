@@ -1,12 +1,13 @@
 import os
 from pathlib import Path
 from datetime import datetime
+import time
 from dotenv import load_dotenv
 from vision_agent.tools.pdf_parser import PDFParser
 from vision_agent.utils.config import Config
-from pydantic import BaseModel, ConfigDict
 import PyPDF2
 import tempfile
+import requests.exceptions
 
 
 def split_pdf(pdf_path: str) -> list:
@@ -126,6 +127,30 @@ def combine_markdown_files(file_paths: list, output_path: str = "examples/output
     return output_file
 
 
+def process_pdf_with_retry(parser, pdf_path, max_retries=3, retry_delay=5):
+    """處理 PDF 並在失敗時重試
+
+    Args:
+        parser: PDF 解析器實例
+        pdf_path (str): PDF 文件路徑
+        max_retries (int): 最大重試次數
+        retry_delay (int): 重試間隔（秒）
+
+    Returns:
+        dict: 處理結果
+    """
+    for attempt in range(max_retries):
+        try:
+            return parser.process_pdf(pdf_path)
+        except requests.exceptions.RequestException as e:
+            if attempt < max_retries - 1:
+                print(f"處理失敗（第 {attempt + 1} 次嘗試）：{str(e)}")
+                print(f"等待 {retry_delay} 秒後重試...")
+                time.sleep(retry_delay)
+            else:
+                raise e
+
+
 def main():
     # 載入 .env 檔案
     env_path = Path(__file__).parent.parent / '.env'
@@ -134,7 +159,8 @@ def main():
     # 設置配置
     config = Config(
         landing_ai_api_key=os.getenv("LANDING_AI_API_KEY"),
-        openai_api_key=os.getenv("OPENAI_API_KEY")
+        openai_api_key=os.getenv("OPENAI_API_KEY"),
+        anthropic_api_key=os.getenv("ANTHROPIC_API_KEY")
     )
     
     # 初始化 PDF 解析器
@@ -162,8 +188,8 @@ def main():
         for i, temp_file in enumerate(temp_files, 1):
             print(f"\n處理第 {i} 頁...")
             try:
-                # 處理單頁 PDF
-                results = parser.process_pdf(temp_file)
+                # 處理單頁 PDF（使用重試機制）
+                results = process_pdf_with_retry(parser, temp_file)
                 
                 # 如果成功，保存結果
                 if "error" not in results:
